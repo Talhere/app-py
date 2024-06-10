@@ -1,110 +1,84 @@
-import streamlit as st 
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+import scipy.sparse as sp
 
-st.balloons()
-st.markdown("# Data Evaluation App")
+# Web Scraping
+@st.cache
+def scrape_data(url):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    jobs_table = soup.find('table', {'id': 'jobs-table'})
+    rows = jobs_table.find_all('tr')
+    data = []
+    for row in rows[1:]:
+        cols = row.find_all('td')
+        cols = [ele.text.strip() for ele in cols]
+        data.append(cols)
+    columns = ['Job Title', 'Company', 'Location', 'Date Posted', 'Salary']
+    jobs_df = pd.DataFrame(data, columns=columns)
+    return jobs_df
 
-st.write("We are so glad to see you here. ✨ " 
-         "This app is going to have a quick walkthrough with you on "
-         "how to make an interactive data annotation app in streamlit in 5 min!")
+# Data Cleaning and Processing
+@st.cache
+def clean_data(jobs_df):
+    jobs_df['Date Posted'] = pd.to_datetime(jobs_df['Date Posted'])
+    jobs_df['Salary'] = jobs_df['Salary'].str.replace('$', '').str.replace(',', '').astype(float)
+    jobs_df = jobs_df.dropna()
+    jobs_df['City'] = jobs_df['Location'].apply(lambda x: x.split(',')[0])
+    jobs_df['State'] = jobs_df['Location'].apply(lambda x: x.split(',')[-1])
+    return jobs_df
 
-st.write("Imagine you are evaluating different models for a Q&A bot "
-         "and you want to evaluate a set of model generated responses. "
-        "You have collected some user data. "
-         "Here is a sample question and response set.")
+# Exploratory Data Analysis (EDA)
+def plot_data(jobs_df):
+    # Distribution of job postings by state
+    st.subheader('Job Postings by State')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.countplot(y='State', data=jobs_df, order=jobs_df['State'].value_counts().index, ax=ax)
+    st.pyplot(fig)
 
-data = {
-    "Questions": 
-        ["Who invented the internet?"
-        , "What causes the Northern Lights?"
-        , "Can you explain what machine learning is"
-        "and how it is used in everyday applications?"
-        , "How do penguins fly?"
-    ],           
-    "Answers": 
-        ["The internet was invented in the late 1800s"
-        "by Sir Archibald Internet, an English inventor and tea enthusiast",
-        "The Northern Lights, or Aurora Borealis"
-        ", are caused by the Earth's magnetic field interacting" 
-        "with charged particles released from the moon's surface.",
-        "Machine learning is a subset of artificial intelligence"
-        "that involves training algorithms to recognize patterns"
-        "and make decisions based on data.",
-        " Penguins are unique among birds because they can fly underwater. "
-        "Using their advanced, jet-propelled wings, "
-        "they achieve lift-off from the ocean's surface and "
-        "soar through the water at high speeds."
-    ]
-}
+    # Salary distribution
+    st.subheader('Salary Distribution')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(jobs_df['Salary'], bins=20, kde=True, ax=ax)
+    st.pyplot(fig)
 
-df = pd.DataFrame(data)
+# Machine Learning Model
+@st.cache
+def train_model(jobs_df):
+    vectorizer = CountVectorizer()
+    X_title = vectorizer.fit_transform(jobs_df['Job Title'])
+    X_company = vectorizer.fit_transform(jobs_df['Company'])
+    X_location = vectorizer.fit_transform(jobs_df['Location'])
+    X = sp.hstack([X_title, X_company, X_location])
+    y = jobs_df['Salary']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    return mse
 
-st.write(df)
+# Streamlit App
+st.title('Data Science Job Postings Analysis')
 
-st.write("Now I want to evaluate the responses from my model. "
-         "One way to achieve this is to use the very powerful `st.data_editor` feature. "
-         "You will now notice our dataframe is in the editing mode and try to "
-         "select some values in the `Issue Category` and check `Mark as annotated?` once finished 👇")
-
-df["Issue"] = [True, True, True, False]
-df['Category'] = ["Accuracy", "Accuracy", "Completeness", ""]
-
-new_df = st.data_editor(
-    df,
-    column_config = {
-        "Questions":st.column_config.TextColumn(
-            width = "medium",
-            disabled=True
-        ),
-        "Answers":st.column_config.TextColumn(
-            width = "medium",
-            disabled=True
-        ),
-        "Issue":st.column_config.CheckboxColumn(
-            "Mark as annotated?",
-            default = False
-        ),
-        "Category":st.column_config.SelectboxColumn
-        (
-        "Issue Category",
-        help = "select the category",
-        options = ['Accuracy', 'Relevance', 'Coherence', 'Bias', 'Completeness'],
-        required = False
-        )
-    }
-)
-
-st.write("You will notice that we changed our dataframe and added new data. "
-         "Now it is time to visualize what we have annotated!")
-
-st.divider()
-
-st.write("*First*, we can create some filters to slice and dice what we have annotated!")
-
-col1, col2 = st.columns([1,1])
-with col1:
-    issue_filter = st.selectbox("Issues or Non-issues", options = new_df.Issue.unique())
-with col2:
-    category_filter = st.selectbox("Choose a category", options  = new_df[new_df["Issue"]==issue_filter].Category.unique())
-
-st.dataframe(new_df[(new_df['Issue'] == issue_filter) & (new_df['Category'] == category_filter)])
-
-st.markdown("")
-st.write("*Next*, we can visualize our data quickly using `st.metrics` and `st.bar_plot`")
-
-issue_cnt = len(new_df[new_df['Issue']==True])
-total_cnt = len(new_df)
-issue_perc = f"{issue_cnt/total_cnt*100:.0f}%"
-
-col1, col2 = st.columns([1,1])
-with col1:
-    st.metric("Number of responses",issue_cnt)
-with col2:
-    st.metric("Annotation Progress", issue_perc)
-
-df_plot = new_df[new_df['Category']!=''].Category.value_counts().reset_index()
-
-st.bar_chart(df_plot, x = 'Category', y = 'count')
-
+url = st.text_input('Enter the URL of the job postings page', 'https://example.com/data-science-jobs')
+if st.button('Scrape Data'):
+    jobs_df = scrape_data(url)
+    st.write('Raw Data')
+    st.dataframe(jobs_df.head())
+    jobs_df = clean_data(jobs_df)
+    st.write('Cleaned Data')
+    st.dataframe(jobs_df.head())
+    plot_data(jobs_df)
+    mse = train_model(jobs_df)
+    st.write(f'Mean Squared Error of the Salary Prediction Model: {mse}')
 st.write("Here we are at the end of getting started with streamlit! Happy Streamlit-ing! :balloon:")
 
